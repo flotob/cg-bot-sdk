@@ -49,7 +49,7 @@ export class BotClient {
       channelId,
       body: messageBody,
       attachments: attachments || [],
-      parentMessageId: replyTo || null,
+      replyToMessageId: replyTo || null,
     });
 
     return response;
@@ -60,6 +60,12 @@ export class BotClient {
    */
   private async request<T>(path: string, data: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    
+    // Debug logging
+    if (process.env.DEBUG_SDK) {
+      console.log('[SDK] Request:', url);
+      console.log('[SDK] Body:', JSON.stringify(data, null, 2));
+    }
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -77,13 +83,36 @@ export class BotClient {
 
       clearTimeout(timeoutId);
 
-      const responseData = await response.json() as T | ApiErrorResponse;
+      const responseText = await response.text();
+      
+      // Debug logging
+      if (process.env.DEBUG_SDK) {
+        console.log('[SDK] Response status:', response.status);
+        console.log('[SDK] Response body:', responseText);
+      }
+
+      let responseData: T | ApiErrorResponse;
+      try {
+        responseData = JSON.parse(responseText) as T | ApiErrorResponse;
+      } catch {
+        throw new BotApiError('INVALID_RESPONSE', `Invalid JSON response: ${responseText}`, response.status);
+      }
 
       if (!response.ok) {
         const errorData = responseData as ApiErrorResponse;
         throw new BotApiError(
           errorData.error || 'UNKNOWN_ERROR',
           errorData.message || `Request failed with status ${response.status}`,
+          response.status
+        );
+      }
+
+      // Also check for error in response body (API sometimes returns 200 with error)
+      const maybeError = responseData as { status?: string; error?: string; message?: string };
+      if (maybeError.status === 'ERROR' || maybeError.error) {
+        throw new BotApiError(
+          maybeError.error || 'UNKNOWN_ERROR',
+          maybeError.message || 'Request failed',
           response.status
         );
       }
